@@ -58,6 +58,7 @@ void setup() {
   digitalWrite(trig, HIGH);
   delayMicroseconds(10);
   digitalWrite(trig, LOW);
+  
   // Speed * time / 2 (divide by 2 because travel there and back, 0.034 is cm/microsecond)
   lastDist = pulseIn(echo, HIGH) * 0.034 / 2;
   lastTime = millis();
