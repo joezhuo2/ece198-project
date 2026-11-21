@@ -79,23 +79,31 @@ int reps = 0;
 bool wentDown = false;          // true once a downward movement has been seen
 const char *lastCategory = "";  // reps reset when the detected exercise changes
 
+// Safety limits used for warnings (checked in every phase)
+const float TILT_LIMIT = 15.0;   // degrees from the standing pose
+const float SPEED_LIMIT = 50.0;  // cm/s of downward hip movement
+const float CARRY_TILT = 10.0;   // carries should stay almost perfectly upright
+
 // Maps each AI label to a functional category from
-// "Sample Exercises and Categories" and an optional form message.
+// "Sample Exercises and Categories", an optional form message, and which
+// safety limits apply to that exercise (0 = don't check).
 struct LabelInfo {
   const char *label;
   const char *category;
   const char *form;
+  float maxTilt;
+  float maxSpeed;
 };
 
 const LabelInfo LABEL_INFO[] = {
-  {"squat_good", "Squat/Lunge", "Form: OK"},
-  {"squat_lean", "Squat/Lunge", "!! LEANING !!"},
-  {"squat_fast", "Squat/Lunge", "!! TOO FAST !!"},
-  {"lunge", "Squat/Lunge", ""},
-  {"hinge", "Hinge", ""},
-  {"carry", "Carry", ""},
-  {"floor", "Core", ""},
-  {"idle", "Rest/Upper body", ""},  // push/pull barely move the hip, so they look like rest
+  {"squat_good", "Squat/Lunge", "Form: OK", TILT_LIMIT, SPEED_LIMIT},
+  {"squat_lean", "Squat/Lunge", "!! LEANING !!", TILT_LIMIT, SPEED_LIMIT},
+  {"squat_fast", "Squat/Lunge", "!! TOO FAST !!", TILT_LIMIT, SPEED_LIMIT},
+  {"lunge", "Squat/Lunge", "", TILT_LIMIT, SPEED_LIMIT},
+  {"hinge", "Hinge", "", 0, 0},                 // hinges tilt forward on purpose
+  {"carry", "Carry", "", CARRY_TILT, 0},        // leaning sideways under the load
+  {"floor", "Core", "", 0, 0},                  // lying down, tilt is meaningless
+  {"idle", "Rest/Upper body", "", TILT_LIMIT, 0},  // e.g. leaning back during presses
 };
 
 // Returns the table entry for an AI label, or nullptr if it isn't listed
@@ -293,14 +301,27 @@ void loop() {
   }
   bool strength = phase == STRENGTH_PHASE;
 
-  // Look up the detected exercise category and form message from the AI label
+  // Look up the detected exercise category, form message and safety limits.
+  // Without a model (or for an unknown label) the general limits apply.
   const char *category = "";
   const char *form = "";
+  float maxTilt = TILT_LIMIT;
+  float maxSpeed = SPEED_LIMIT;
 #ifdef HAS_MODEL
   const LabelInfo *info = findLabel(formLabel);
   category = info ? info->category : formLabel;
-  form = info ? info->form : "";
+  if (info) {
+    form = info->form;
+    maxTilt = info->maxTilt;
+    maxSpeed = info->maxSpeed;
+  }
 #endif
+
+  // Pick one warning to show, most specific first: the AI's form warning,
+  // then the tilt limit, then the downward speed limit.
+  const char *warning = form[0] == '!' ? form : "";
+  if (!warning[0] && maxTilt > 0 && tiltAngle > maxTilt) warning = "!! EXCESSIVE LEAN !!";
+  if (!warning[0] && maxSpeed > 0 && velocity > maxSpeed) warning = "!! TOO FAST !!";
 
   // A new exercise (or rest between sets) starts a new rep count
   if (strcmp(category, lastCategory) != 0) {
@@ -345,16 +366,18 @@ void loop() {
 #endif
   }
 
-  if (strength) {
-#ifndef HAS_MODEL
-    // No trained model: fall back to a fixed 15 degree lean limit
-    form = tiltAngle > 15.0 ? "!! EXCESSIVE LEAN !!" : "";
-#endif
-    // Warnings start with '!' and are drawn inverted so they stand out
-    display.setCursor(0, 20);
-    if (form[0] == '!') display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
-    display.println(form);
+  // Third line: warnings in every phase, drawn inverted so they stand out.
+  // With no warning, show "Form: OK" during strength if the AI reports it.
+  display.setCursor(0, 20);
+  if (warning[0]) {
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    display.println(warning);
     display.setTextColor(SSD1306_WHITE);
+  } else if (strength) {
+    display.println(form);
+  }
+
+  if (strength) {
     display.setCursor(0, 34);
     display.print("Reps: ");
     display.print(reps);
